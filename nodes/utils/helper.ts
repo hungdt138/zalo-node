@@ -2,45 +2,66 @@ import axios from 'axios';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type { ImageMetadataGetterResponse } from 'zca-js/dist/context';
 
-
-export async function saveImage(url: string) {
-    try {
-			let n8nUserFolder;
-
-			// Cố gắng lấy đường dẫn từ biến môi trường N8N_USER_FOLDER
-			if (process.env.N8N_USER_FOLDER) {
-					n8nUserFolder = process.env.N8N_USER_FOLDER;
-			} else {
-					// Nếu biến môi trường không được đặt, sử dụng đường dẫn mặc định
-					n8nUserFolder = path.join(os.homedir(), '.n8n');
-			}
-
-			const dataStoragePath = path.join(n8nUserFolder, 'temp_files');
-
-			// Kiểm tra xem thư mục đã tồn tại chưa, nếu chưa thì tạo mới
-			const fs = require('fs');
-			if (!fs.existsSync(dataStoragePath)){
-					fs.mkdirSync(dataStoragePath, { recursive: true }); // recursive: true để tạo các thư mục cha nếu chưa có
-			}
-
-			const timestamp = Date.now();
-			const imgPath  = path.join(dataStoragePath,`temp-${timestamp}.png`);
-
-			const { data } = await axios.get(url, { responseType: "arraybuffer" });
-			fs.writeFileSync(imgPath, Buffer.from(data, "utf-8"));
-
-			return imgPath;
-    } catch (error) {
-        console.error(error);
-        return null;
-    }
+/**
+ * Image metadata getter for zca-js v2.
+ * Uses sharp if available (optional dependency), otherwise returns null.
+ */
+export async function getImageMetadata(filePath: string): Promise<ImageMetadataGetterResponse> {
+	try {
+		const sharp = require('sharp');
+		const metadata = await sharp(filePath).metadata();
+		const stats = fs.statSync(filePath);
+		return {
+			width: metadata.width || 0,
+			height: metadata.height || 0,
+			size: stats.size,
+		};
+	} catch (_error) {
+		// sharp not available or error reading image — return null
+		return null;
+	}
 }
 
-export function removeImage(imgPath: string) {
-    try {
-        fs.unlinkSync(imgPath);
-    } catch (error) {
-        console.error(error);
-    }
+/**
+ * Tải file bất kỳ (ảnh, pdf, zip...) và lưu vào thư mục tạm trong n8n
+ */
+export async function saveFile(url: string): Promise<string | null> {
+	try {
+		const n8nUserFolder = process.env.N8N_USER_FOLDER || path.join(os.homedir(), '.n8n');
+		const dataStoragePath = path.join(n8nUserFolder, 'temp_files');
+
+		if (!fs.existsSync(dataStoragePath)) {
+			fs.mkdirSync(dataStoragePath, { recursive: true });
+		}
+
+		// Lấy phần mở rộng từ URL (nếu có), ví dụ: .png, .pdf
+		const urlPath = new URL(url).pathname;
+		const ext = path.extname(urlPath) || '.bin';
+
+		const timestamp = Date.now();
+		const filePath = path.join(dataStoragePath, `temp-${timestamp}${ext}`);
+
+		const { data } = await axios.get(url, { responseType: 'arraybuffer' });
+		fs.writeFileSync(filePath, data); // đúng kiểu nhị phân
+
+		return filePath;
+	} catch (error) {
+		console.error('Lỗi khi tải/lưu file:', error);
+		return null;
+	}
+}
+
+/**
+ * Xoá file đã lưu
+ */
+export function removeFile(filePath: string): void {
+	try {
+		if (fs.existsSync(filePath)) {
+			fs.unlinkSync(filePath);
+		}
+	} catch (error) {
+		console.error('Lỗi khi xoá file:', error);
+	}
 }
